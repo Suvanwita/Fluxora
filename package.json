@@ -7,13 +7,14 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "test": "jest --runInBand",
-    "test:watch": "jest --watch",
+    "lint": "node scripts/lint.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "worker": "node src/workers/index.js",
-    "lint": "node scripts/check-env.js"
+    "seed": "node prisma/seed.js",
+    "worker:logs": "node src/workers/logs.worker.js",
+    "worker:analytics": "node src/workers/analytics.worker.js",
+    "docker:up": "docker compose up -d"
   },
   "keywords": [
     "node",
