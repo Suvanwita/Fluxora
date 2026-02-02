@@ -7,11 +7,228 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  DISABLED
+  REVOKED
+  EXPIRED
+}
+
+enum RateLimitAlgorithm {
+  FIXED_WINDOW
+  SLIDING_WINDOW
+  TOKEN_BUCKET
+}
+
+enum RuleScope {
+  GLOBAL
+  PROJECT
+  API_KEY
+  ENDPOINT
+}
+
+enum RequestDecision {
+  ALLOWED
+  BLOCKED
+  THROTTLED
+}
+
+enum AuditAction {
+  USER_REGISTERED
+  USER_LOGIN
+  PROJECT_CREATED
+  PROJECT_UPDATED
+  PROJECT_DELETED
+  API_KEY_CREATED
+  API_KEY_UPDATED
+  API_KEY_REVOKED
+  RATE_LIMIT_RULE_CREATED
+  RATE_LIMIT_RULE_UPDATED
+  RATE_LIMIT_RULE_DELETED
+  WEBHOOK_ENDPOINT_CREATED
+  WEBHOOK_ENDPOINT_UPDATED
+  WEBHOOK_ENDPOINT_DELETED
+}
+
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
+  id           String     @id @default(uuid())
+  email        String     @unique
   passwordHash String
   name         String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  role         Role       @default(MEMBER)
+  projects     Project[]
+  auditLogs    AuditLog[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([createdAt])
+}
+
+model Project {
+  id                String            @id @default(uuid())
+  userId            String
+  name              String
+  slug              String            @unique
+  description       String?
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  apiKeys           ApiKey[]
+  rateLimitRules    RateLimitRule[]
+  requestLogs       RequestLog[]
+  usageDaily        UsageDaily[]
+  auditLogs         AuditLog[]
+  idempotencyKeys   IdempotencyKey[]
+  webhookEndpoints  WebhookEndpoint[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model ApiKey {
+  id             String          @id @default(uuid())
+  projectId      String
+  name           String
+  keyPrefix      String
+  keyHash        String          @unique
+  status         ApiKeyStatus    @default(ACTIVE)
+  expiresAt      DateTime?
+  lastUsedAt     DateTime?
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rateLimitRules RateLimitRule[]
+  requestLogs    RequestLog[]
+  usageDaily     UsageDaily[]
+  auditLogs      AuditLog[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+model RateLimitRule {
+  id              String             @id @default(uuid())
+  projectId       String?
+  apiKeyId        String?
+  name            String
+  scope           RuleScope
+  endpoint        String?
+  algorithm       RateLimitAlgorithm
+  limit           Int
+  windowSeconds   Int
+  refillRate      Int?
+  burstLimit      Int?
+  enabled         Boolean            @default(true)
+  project         Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  apiKey          ApiKey?            @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([projectId])
+  @@index([apiKeyId])
+  @@index([createdAt])
+  @@index([endpoint])
+}
+
+model RequestLog {
+  id             String          @id @default(uuid())
+  projectId      String
+  apiKeyId       String?
+  requestId      String?
+  method         String
+  endpoint       String
+  statusCode     Int?
+  decision       RequestDecision
+  ipAddress      String?
+  userAgent      String?
+  latencyMs      Int?
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  apiKey         ApiKey?         @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  createdAt      DateTime        @default(now())
+
+  @@index([projectId])
+  @@index([apiKeyId])
+  @@index([createdAt])
+  @@index([endpoint])
+  @@index([decision])
+}
+
+model UsageDaily {
+  id             String   @id @default(uuid())
+  projectId      String
+  apiKeyId       String?
+  date           DateTime @db.Date
+  requestCount   Int      @default(0)
+  allowedCount   Int      @default(0)
+  blockedCount   Int      @default(0)
+  throttledCount Int      @default(0)
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  apiKey         ApiKey?  @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([projectId, apiKeyId, date])
+  @@index([projectId])
+  @@index([apiKeyId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  userId      String?
+  projectId   String?
+  apiKeyId    String?
+  action      AuditAction
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  project     Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  apiKey      ApiKey?     @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+
+  @@index([userId])
+  @@index([projectId])
+  @@index([apiKeyId])
+  @@index([createdAt])
+}
+
+model IdempotencyKey {
+  id             String    @id @default(uuid())
+  projectId      String
+  key            String
+  requestHash    String
+  responseStatus Int?
+  responseBody   Json?
+  expiresAt      DateTime
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([projectId, key])
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+model WebhookEndpoint {
+  id          String   @id @default(uuid())
+  projectId   String
+  url         String
+  secretHash  String
+  enabled     Boolean  @default(true)
+  events      String[]
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([createdAt])
+  @@index([url], map: "WebhookEndpoint_endpoint_idx")
 }
