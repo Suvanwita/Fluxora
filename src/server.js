@@ -1,6 +1,6 @@
 const app = require('./app');
-const { prisma } = require('./config/database');
-const { redis } = require('./config/redis');
+const { disconnectDb } = require('./config/db');
+const { disconnectRedis } = require('./config/redis');
 const { env } = require('./config/env');
 const { logger } = require('./utils/logger');
 
@@ -13,8 +13,8 @@ const shutdown = async (signal) => {
 
   server.close(async () => {
     logger.info('HTTP server closed');
-    await prisma.$disconnect();
-    redis.disconnect();
+    await disconnectDb();
+    await disconnectRedis();
     process.exit(0);
   });
 

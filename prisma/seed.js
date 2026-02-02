@@ -1,4 +1,4 @@
-const { prisma } = require('../src/config/database');
+const { disconnectDb, prisma } = require('../src/config/db');
 const { logger } = require('../src/utils/logger');
 
 async function main() {
@@ -11,5 +11,5 @@ main()
     process.exit(1);
   })
   .finally(async () => {
-    await prisma.$disconnect();
+    await disconnectDb();
   });
