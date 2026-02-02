@@ -1,8 +1,13 @@
 const request = require('supertest');
 
 process.env.NODE_ENV = 'test';
+process.env.PORT = '4001';
 process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/fluxora_test?schema=public';
+process.env.REDIS_URL = 'redis://localhost:6379';
 process.env.JWT_SECRET = 'test-secret-with-at-least-thirty-two-chars';
+process.env.JWT_EXPIRES_IN = '1d';
+process.env.RATE_LIMIT_FALLBACK_MODE = 'allow';
+process.env.LOG_LEVEL = 'dev';
 
 const app = require('../src/app');
 
