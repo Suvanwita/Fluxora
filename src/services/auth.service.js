@@ -1,8 +1,7 @@
-const bcrypt = require('bcryptjs');
-
 const userRepository = require('../repositories/user.repository');
 const { ApiError } = require('../utils/api-error');
 const { signToken } = require('../utils/jwt');
+const { hashPassword, verifyPassword } = require('../utils/password');
 
 const toPublicUser = (user) => ({
   id: user.id,
@@ -19,7 +18,7 @@ const register = async ({ email, password, name }) => {
     throw new ApiError(409, 'Email is already registered');
   }
 
-  const passwordHash = await bcrypt.hash(password, 12);
+  const passwordHash = await hashPassword(password);
   const user = await userRepository.create({ email, passwordHash, name });
   const token = signToken({ sub: user.id });
 
@@ -33,7 +32,7 @@ const login = async ({ email, password }) => {
     throw new ApiError(401, 'Invalid credentials');
   }
 
-  const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+  const isPasswordValid = await verifyPassword(password, user.passwordHash);
 
   if (!isPasswordValid) {
     throw new ApiError(401, 'Invalid credentials');
