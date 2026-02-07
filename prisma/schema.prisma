@@ -57,6 +57,12 @@ enum AuditAction {
   WEBHOOK_ENDPOINT_DELETED
 }
 
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
 model User {
   id           String     @id @default(uuid())
   email        String     @unique
@@ -73,11 +79,12 @@ model User {
 
 model Project {
   id                String            @id @default(uuid())
-  userId            String
+  ownerId           String
   name              String
   slug              String            @unique
   description       String?
-  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status            ProjectStatus     @default(ACTIVE)
+  owner             User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   apiKeys           ApiKey[]
   rateLimitRules    RateLimitRule[]
   requestLogs       RequestLog[]
@@ -88,7 +95,7 @@ model Project {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
-  @@index([userId])
+  @@index([ownerId])
   @@index([createdAt])
 }
 
