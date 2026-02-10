@@ -24,6 +24,17 @@ const listRateLimitRulesByProject = ({ projectId, skip, take }) => {
   });
 };
 
+const listEnabledRulesForApiKeyAndProject = ({ apiKeyId, projectId }) => {
+  return prisma.rateLimitRule.findMany({
+    where: {
+      projectId,
+      enabled: true,
+      OR: [{ apiKeyId: null }, { apiKeyId }],
+    },
+    orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+  });
+};
+
 const findRateLimitRuleByIdForOwner = ({ ruleId, ownerId }) => {
   return prisma.rateLimitRule.findFirst({
     where: {
@@ -56,6 +67,7 @@ module.exports = {
   createRateLimitRule,
   deleteRateLimitRule,
   findRateLimitRuleByIdForOwner,
+  listEnabledRulesForApiKeyAndProject,
   listRateLimitRulesByProject,
   updateRateLimitRule,
 };

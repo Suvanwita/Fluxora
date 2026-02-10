@@ -2,7 +2,25 @@ const apiKeyRepository = require('../repositories/api-key.repository');
 const projectRepository = require('../repositories/project.repository');
 const rateLimitRuleRepository = require('../repositories/rate-limit-rule.repository');
 const { ApiError } = require('../utils/api-error');
+const { matchEndpointPattern } = require('../utils/endpoint-matcher');
 const { getPagination, getPaginationMeta } = require('../utils/pagination');
+
+const DEFAULT_PROJECT_RULE = Object.freeze({
+  id: null,
+  name: 'Default project rule',
+  scope: 'PROJECT',
+  algorithm: 'FIXED_WINDOW',
+  limit: 1000,
+  windowSeconds: 60,
+  refillRate: null,
+  burstCapacity: null,
+  endpointPattern: null,
+  priority: 0,
+  enabled: true,
+  metadata: {
+    default: true,
+  },
+});
 
 const toRuleResponse = (rule) => ({
   id: rule.id,
@@ -33,6 +51,59 @@ const inferScope = ({ apiKeyId, endpointPattern }) => {
   }
 
   return 'PROJECT';
+};
+
+const normalizeMethod = (method) => {
+  return method ? method.toUpperCase() : undefined;
+};
+
+const toArray = (value) => {
+  if (!value) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+};
+
+const metadataMatches = ({ metadata, method, clientId }) => {
+  if (!metadata) {
+    return true;
+  }
+
+  const allowedMethods = toArray(metadata.methods || metadata.method || metadata.httpMethods).map(normalizeMethod);
+  const allowedClientIds = toArray(metadata.clientIds || metadata.clientId);
+
+  if (allowedMethods.length > 0 && !allowedMethods.includes(normalizeMethod(method))) {
+    return false;
+  }
+
+  if (allowedClientIds.length > 0 && !allowedClientIds.includes(clientId)) {
+    return false;
+  }
+
+  return true;
+};
+
+const ruleMatchesRequest = ({ rule, apiKey, endpoint, method, clientId }) => {
+  if (rule.apiKeyId && rule.apiKeyId !== apiKey.id) {
+    return false;
+  }
+
+  if (rule.endpointPattern && !matchEndpointPattern(rule.endpointPattern, endpoint)) {
+    return false;
+  }
+
+  return metadataMatches({ metadata: rule.metadata, method, clientId });
+};
+
+const sortRulesByPriority = (rules) => {
+  return [...rules].sort((a, b) => {
+    if (b.priority !== a.priority) {
+      return b.priority - a.priority;
+    }
+
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
 };
 
 const ensureProjectOwner = async ({ projectId, userId }) => {
@@ -171,10 +242,47 @@ const deleteRateLimitRule = async ({ userId, ruleId }) => {
   await rateLimitRuleRepository.deleteRateLimitRule(ruleId);
 };
 
+const getDefaultProjectRule = ({ projectId }) => ({
+  ...DEFAULT_PROJECT_RULE,
+  projectId,
+  apiKeyId: null,
+  isDefault: true,
+});
+
+const matchRateLimitRule = async ({ apiKey, endpoint, method, clientId }) => {
+  if (!apiKey?.id || !apiKey?.projectId) {
+    throw new ApiError(400, 'API key with id and projectId is required');
+  }
+
+  const rules = await rateLimitRuleRepository.listEnabledRulesForApiKeyAndProject({
+    apiKeyId: apiKey.id,
+    projectId: apiKey.projectId,
+  });
+  const matchingRule = sortRulesByPriority(rules).find((rule) =>
+    ruleMatchesRequest({ rule, apiKey, endpoint, method, clientId }),
+  );
+
+  if (!matchingRule) {
+    return {
+      rule: getDefaultProjectRule({ projectId: apiKey.projectId }),
+      matched: false,
+      source: 'default',
+    };
+  }
+
+  return {
+    rule: toRuleResponse(matchingRule),
+    matched: true,
+    source: 'custom',
+  };
+};
+
 module.exports = {
   createRateLimitRule,
   deleteRateLimitRule,
   listRateLimitRules,
+  matchRateLimitRule,
   setRateLimitRuleEnabled,
   updateRateLimitRule,
+  ruleMatchesRequest,
 };
