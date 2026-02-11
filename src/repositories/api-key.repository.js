@@ -41,6 +41,15 @@ const findApiKeyByIdForOwner = ({ apiKeyId, ownerId }) => {
   });
 };
 
+const findApiKeyByHash = (keyHash) => {
+  return prisma.apiKey.findUnique({
+    where: { keyHash },
+    include: {
+      project: true,
+    },
+  });
+};
+
 const updateApiKey = ({ apiKeyId, data }) => {
   return prisma.apiKey.update({
     where: { id: apiKeyId },
@@ -51,6 +60,7 @@ const updateApiKey = ({ apiKeyId, data }) => {
 module.exports = {
   countApiKeysByProject,
   createApiKey,
+  findApiKeyByHash,
   findApiKeyByIdForOwner,
   listApiKeysByProject,
   updateApiKey,
