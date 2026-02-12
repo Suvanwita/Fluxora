@@ -1,33 +1,63 @@
 const { redis } = require('../config/redis');
 const { getFixedWindow, getSlidingWindow, toUnixSeconds } = require('../utils/time-window');
 
-const buildLimiterKey = ({ algorithm, apiKeyId, ruleId, projectId, endpoint, method, clientId }) => {
-  const targetId = ruleId || `default:${projectId}`;
-  const parts = ['ratelimit', algorithm, targetId, apiKeyId, method, endpoint, clientId || 'anonymous'];
+const sanitizeKeyPart = (part) => {
+  return String(part || 'none').replace(/[^a-zA-Z0-9:_-]/g, '_');
+};
 
-  return parts.map((part) => String(part).replace(/\s+/g, '_')).join(':');
+const buildIdentity = ({ apiKeyId, endpoint, method, clientId }) => {
+  return [apiKeyId, clientId || 'anonymous', method, endpoint].map(sanitizeKeyPart).join(':');
+};
+
+const getRuleKeyId = ({ ruleId, projectId }) => {
+  return sanitizeKeyPart(ruleId || `default:${projectId}`);
+};
+
+const buildFixedWindowKey = ({ ruleId, projectId, identity, windowStart }) => {
+  return `fluxora:rl:fixed:${getRuleKeyId({ ruleId, projectId })}:${identity}:${windowStart}`;
+};
+
+const buildLimiterKey = ({ algorithm, apiKeyId, ruleId, projectId, endpoint, method, clientId }) => {
+  const targetId = getRuleKeyId({ ruleId, projectId });
+  const identity = buildIdentity({ apiKeyId, endpoint, method, clientId });
+  const normalizedAlgorithm = sanitizeKeyPart(algorithm).toLowerCase();
+
+  return `fluxora:rl:${normalizedAlgorithm}:${targetId}:${identity}`;
 };
 
 const toResetDate = (unixSeconds) => {
   return new Date(unixSeconds * 1000).toISOString();
 };
 
-const applyFixedWindow = async ({ rule, key, now }) => {
+const applyFixedWindow = async ({ rule, apiKey, endpoint, method, clientId, now }) => {
   const window = getFixedWindow(rule.windowSeconds, now);
-  const count = await redis.incr(key);
+  const identity = buildIdentity({
+    apiKeyId: apiKey.id,
+    endpoint,
+    method,
+    clientId,
+  });
+  const key = buildFixedWindowKey({
+    ruleId: rule.id,
+    projectId: apiKey.projectId,
+    identity,
+    windowStart: window.start,
+  });
+  const currentCount = await redis.incr(key);
 
-  if (count === 1) {
+  if (currentCount === 1) {
     await redis.expire(key, window.ttlSeconds);
   }
 
-  const remaining = Math.max(rule.limit - count, 0);
-  const allowed = count <= rule.limit;
+  const remaining = Math.max(rule.limit - currentCount, 0);
+  const allowed = currentCount <= rule.limit;
 
   return {
     allowed,
     remaining,
     resetAt: toResetDate(window.end),
     retryAfter: allowed ? 0 : window.ttlSeconds,
+    currentCount,
     reason: allowed ? 'allowed' : 'rate_limit_exceeded',
   };
 };
@@ -113,10 +143,20 @@ const runLimiter = async ({ rule, apiKey, endpoint, method, clientId, requestId,
     return applyTokenBucket(input);
   }
 
-  return applyFixedWindow(input);
+  return applyFixedWindow({
+    rule,
+    apiKey,
+    endpoint,
+    method,
+    clientId,
+    now,
+  });
 };
 
 module.exports = {
+  applyFixedWindow,
+  buildFixedWindowKey,
+  buildIdentity,
   buildLimiterKey,
   runLimiter,
 };
