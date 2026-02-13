@@ -17,6 +17,10 @@ const buildFixedWindowKey = ({ ruleId, projectId, identity, windowStart }) => {
   return `fluxora:rl:fixed:${getRuleKeyId({ ruleId, projectId })}:${identity}:${windowStart}`;
 };
 
+const buildSlidingWindowKey = ({ ruleId, projectId, identity }) => {
+  return `fluxora:rl:sliding:${getRuleKeyId({ ruleId, projectId })}:${identity}`;
+};
+
 const buildLimiterKey = ({ algorithm, apiKeyId, ruleId, projectId, endpoint, method, clientId }) => {
   const targetId = getRuleKeyId({ ruleId, projectId });
   const identity = buildIdentity({ apiKeyId, endpoint, method, clientId });
@@ -62,18 +66,35 @@ const applyFixedWindow = async ({ rule, apiKey, endpoint, method, clientId, now 
   };
 };
 
-const applySlidingWindow = async ({ rule, key, now }) => {
+const applySlidingWindow = async ({ rule, apiKey, endpoint, method, clientId, requestId, now }) => {
   const window = getSlidingWindow(rule.windowSeconds, now);
   const nowMs = now.getTime();
-  const member = `${nowMs}:${Math.random()}`;
+  const identity = buildIdentity({
+    apiKeyId: apiKey.id,
+    endpoint,
+    method,
+    clientId,
+  });
+  const key = buildSlidingWindowKey({
+    ruleId: rule.id,
+    projectId: apiKey.projectId,
+    identity,
+  });
+  const member = `${nowMs}:${requestId || Math.random()}`;
 
   await redis.zremrangebyscore(key, 0, window.start * 1000);
-  await redis.zadd(key, nowMs, member);
+
+  const activeCount = await redis.zcard(key);
+  const allowed = activeCount < rule.limit;
+  const currentCount = allowed ? activeCount + 1 : activeCount;
+
+  if (allowed) {
+    await redis.zadd(key, nowMs, member);
+  }
+
   await redis.expire(key, rule.windowSeconds);
 
-  const count = await redis.zcard(key);
-  const remaining = Math.max(rule.limit - count, 0);
-  const allowed = count <= rule.limit;
+  const remaining = Math.max(rule.limit - currentCount, 0);
   const oldest = await redis.zrange(key, 0, 0, 'WITHSCORES');
   const oldestMs = oldest[1] ? Number(oldest[1]) : nowMs;
   const resetAtMs = oldestMs + rule.windowSeconds * 1000;
@@ -84,6 +105,7 @@ const applySlidingWindow = async ({ rule, key, now }) => {
     remaining,
     resetAt: new Date(resetAtMs).toISOString(),
     retryAfter,
+    currentCount,
     reason: allowed ? 'allowed' : 'rate_limit_exceeded',
   };
 };
@@ -136,7 +158,15 @@ const runLimiter = async ({ rule, apiKey, endpoint, method, clientId, requestId,
   const input = { rule, key, now };
 
   if (rule.algorithm === 'SLIDING_WINDOW') {
-    return applySlidingWindow(input);
+    return applySlidingWindow({
+      rule,
+      apiKey,
+      endpoint,
+      method,
+      clientId,
+      requestId,
+      now,
+    });
   }
 
   if (rule.algorithm === 'TOKEN_BUCKET') {
@@ -155,8 +185,10 @@ const runLimiter = async ({ rule, apiKey, endpoint, method, clientId, requestId,
 
 module.exports = {
   applyFixedWindow,
+  applySlidingWindow,
   buildFixedWindowKey,
   buildIdentity,
   buildLimiterKey,
+  buildSlidingWindowKey,
   runLimiter,
 };
