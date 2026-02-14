@@ -1,5 +1,13 @@
+const { readFileSync } = require('fs');
+const { join } = require('path');
+
 const { redis } = require('../config/redis');
 const { getFixedWindow, getSlidingWindow, toUnixSeconds } = require('../utils/time-window');
+
+const tokenBucketScript = readFileSync(
+  join(__dirname, 'limiter', 'scripts', 'tokenBucket.lua'),
+  'utf8',
+);
 
 const sanitizeKeyPart = (part) => {
   return String(part || 'none').replace(/[^a-zA-Z0-9:_-]/g, '_');
@@ -19,6 +27,10 @@ const buildFixedWindowKey = ({ ruleId, projectId, identity, windowStart }) => {
 
 const buildSlidingWindowKey = ({ ruleId, projectId, identity }) => {
   return `fluxora:rl:sliding:${getRuleKeyId({ ruleId, projectId })}:${identity}`;
+};
+
+const buildTokenBucketKey = ({ ruleId, projectId, identity }) => {
+  return `fluxora:rl:token:${getRuleKeyId({ ruleId, projectId })}:${identity}`;
 };
 
 const buildLimiterKey = ({ algorithm, apiKeyId, ruleId, projectId, endpoint, method, clientId }) => {
@@ -110,36 +122,34 @@ const applySlidingWindow = async ({ rule, apiKey, endpoint, method, clientId, re
   };
 };
 
-const applyTokenBucket = async ({ rule, key, now }) => {
+const applyTokenBucket = async ({ rule, apiKey, endpoint, method, clientId, now, cost = 1 }) => {
   const capacity = rule.burstCapacity || rule.limit;
   const refillRate = rule.refillRate || rule.limit / rule.windowSeconds;
   const nowSeconds = toUnixSeconds(now);
-  const currentValue = await redis.get(key);
-  const current = currentValue ? JSON.parse(currentValue) : { tokens: capacity, updatedAt: nowSeconds };
-  const elapsed = Math.max(nowSeconds - current.updatedAt, 0);
-  const tokens = Math.min(capacity, current.tokens + elapsed * refillRate);
-  const allowed = tokens >= 1;
-  const nextTokens = allowed ? tokens - 1 : tokens;
-  const retryAfter = allowed ? 0 : Math.ceil((1 - nextTokens) / refillRate);
-  const resetSeconds = allowed
-    ? Math.ceil((capacity - nextTokens) / refillRate)
-    : retryAfter;
-
-  await redis.set(
-    key,
-    JSON.stringify({
-      tokens: nextTokens,
-      updatedAt: nowSeconds,
-    }),
-    'EX',
-    Math.max(rule.windowSeconds * 2, 1),
-  );
+  const identity = buildIdentity({
+    apiKeyId: apiKey.id,
+    endpoint,
+    method,
+    clientId,
+  });
+  const key = buildTokenBucketKey({
+    ruleId: rule.id,
+    projectId: apiKey.projectId,
+    identity,
+  });
+  const ttlSeconds = Math.max(Math.ceil(capacity / refillRate) * 2, rule.windowSeconds, 1);
+  const result = await redis.eval(tokenBucketScript, 1, key, capacity, refillRate, nowSeconds, cost, ttlSeconds);
+  const allowed = Number(result[0]) === 1;
+  const remaining = Math.max(Math.floor(Number(result[1])), 0);
+  const retryAfter = Number(result[2]);
+  const resetAtSeconds = Number(result[3]);
 
   return {
     allowed,
-    remaining: Math.floor(nextTokens),
-    resetAt: new Date((nowSeconds + resetSeconds) * 1000).toISOString(),
+    remaining,
+    resetAt: new Date(resetAtSeconds * 1000).toISOString(),
     retryAfter,
+    currentCount: capacity - remaining,
     reason: allowed ? 'allowed' : 'rate_limit_exceeded',
   };
 };
@@ -170,7 +180,15 @@ const runLimiter = async ({ rule, apiKey, endpoint, method, clientId, requestId,
   }
 
   if (rule.algorithm === 'TOKEN_BUCKET') {
-    return applyTokenBucket(input);
+    return applyTokenBucket({
+      rule,
+      apiKey,
+      endpoint,
+      method,
+      clientId,
+      now,
+      cost: 1,
+    });
   }
 
   return applyFixedWindow({
@@ -186,9 +204,11 @@ const runLimiter = async ({ rule, apiKey, endpoint, method, clientId, requestId,
 module.exports = {
   applyFixedWindow,
   applySlidingWindow,
+  applyTokenBucket,
   buildFixedWindowKey,
   buildIdentity,
   buildLimiterKey,
   buildSlidingWindowKey,
+  buildTokenBucketKey,
   runLimiter,
 };
