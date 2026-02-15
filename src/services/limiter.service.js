@@ -45,18 +45,25 @@ const toResetDate = (unixSeconds) => {
   return new Date(unixSeconds * 1000).toISOString();
 };
 
-const applyFixedWindow = async ({ rule, apiKey, endpoint, method, clientId, now }) => {
+const resolveIdentity = ({ identity, apiKey, endpoint, method, clientId }) => {
+  return (
+    identity ||
+    buildIdentity({
+      apiKeyId: apiKey.id,
+      endpoint,
+      method,
+      clientId,
+    })
+  );
+};
+
+const applyFixedWindow = async ({ rule, identity, apiKey, endpoint, method, clientId, now }) => {
   const window = getFixedWindow(rule.windowSeconds, now);
-  const identity = buildIdentity({
-    apiKeyId: apiKey.id,
-    endpoint,
-    method,
-    clientId,
-  });
+  const limiterIdentity = resolveIdentity({ identity, apiKey, endpoint, method, clientId });
   const key = buildFixedWindowKey({
     ruleId: rule.id,
-    projectId: apiKey.projectId,
-    identity,
+    projectId: rule.projectId || apiKey.projectId,
+    identity: limiterIdentity,
     windowStart: window.start,
   });
   const currentCount = await redis.incr(key);
@@ -78,19 +85,14 @@ const applyFixedWindow = async ({ rule, apiKey, endpoint, method, clientId, now 
   };
 };
 
-const applySlidingWindow = async ({ rule, apiKey, endpoint, method, clientId, requestId, now }) => {
+const applySlidingWindow = async ({ rule, identity, apiKey, endpoint, method, clientId, requestId, now }) => {
   const window = getSlidingWindow(rule.windowSeconds, now);
   const nowMs = now.getTime();
-  const identity = buildIdentity({
-    apiKeyId: apiKey.id,
-    endpoint,
-    method,
-    clientId,
-  });
+  const limiterIdentity = resolveIdentity({ identity, apiKey, endpoint, method, clientId });
   const key = buildSlidingWindowKey({
     ruleId: rule.id,
-    projectId: apiKey.projectId,
-    identity,
+    projectId: rule.projectId || apiKey.projectId,
+    identity: limiterIdentity,
   });
   const member = `${nowMs}:${requestId || Math.random()}`;
 
@@ -122,20 +124,15 @@ const applySlidingWindow = async ({ rule, apiKey, endpoint, method, clientId, re
   };
 };
 
-const applyTokenBucket = async ({ rule, apiKey, endpoint, method, clientId, now, cost = 1 }) => {
+const applyTokenBucket = async ({ rule, identity, apiKey, endpoint, method, clientId, now, cost = 1 }) => {
   const capacity = rule.burstCapacity || rule.limit;
   const refillRate = rule.refillRate || rule.limit / rule.windowSeconds;
   const nowSeconds = toUnixSeconds(now);
-  const identity = buildIdentity({
-    apiKeyId: apiKey.id,
-    endpoint,
-    method,
-    clientId,
-  });
+  const limiterIdentity = resolveIdentity({ identity, apiKey, endpoint, method, clientId });
   const key = buildTokenBucketKey({
     ruleId: rule.id,
-    projectId: apiKey.projectId,
-    identity,
+    projectId: rule.projectId || apiKey.projectId,
+    identity: limiterIdentity,
   });
   const ttlSeconds = Math.max(Math.ceil(capacity / refillRate) * 2, rule.windowSeconds, 1);
   const result = await redis.eval(tokenBucketScript, 1, key, capacity, refillRate, nowSeconds, cost, ttlSeconds);
@@ -210,5 +207,6 @@ module.exports = {
   buildLimiterKey,
   buildSlidingWindowKey,
   buildTokenBucketKey,
+  resolveIdentity,
   runLimiter,
 };

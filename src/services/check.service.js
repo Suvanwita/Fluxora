@@ -60,13 +60,18 @@ const checkRequest = async ({ apiKey: rawApiKey, endpoint, method, clientId, req
     clientId,
   });
   const rule = ruleMatch.rule;
-  const { runLimiter } = require('./limiter.service');
-  const limiterResult = await runLimiter({
-    rule,
-    apiKey,
+  const { buildIdentity } = require('./limiter.service');
+  const { consume } = require('./limiterFactory');
+  const identity = buildIdentity({
+    apiKeyId: apiKey.id,
     endpoint,
     method,
     clientId,
+  });
+  const limiterResult = await consume({
+    rule,
+    identity,
+    endpoint,
     requestId,
   });
   const decision = limiterResult.allowed ? 'ALLOWED' : 'THROTTLED';

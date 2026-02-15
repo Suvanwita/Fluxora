@@ -41,7 +41,7 @@ const matchedRule = {
 const mockFindApiKeyByHash = jest.fn();
 const mockUpdateApiKey = jest.fn(async () => apiKeyRecord);
 const mockMatchRateLimitRule = jest.fn();
-const mockRunLimiter = jest.fn();
+const mockConsumeLimiter = jest.fn();
 const mockAddLogJob = jest.fn(async () => ({}));
 
 jest.mock('../src/repositories/api-key.repository', () => ({
@@ -58,7 +58,11 @@ jest.mock('../src/services/rate-limit-rule.service', () => ({
 }));
 
 jest.mock('../src/services/limiter.service', () => ({
-  runLimiter: (...args) => mockRunLimiter(...args),
+  buildIdentity: jest.fn(() => 'key_identity'),
+}));
+
+jest.mock('../src/services/limiterFactory', () => ({
+  consume: (...args) => mockConsumeLimiter(...args),
 }));
 
 jest.mock('../src/queues/logs.queue', () => ({
@@ -74,7 +78,7 @@ describe('public check API', () => {
     mockFindApiKeyByHash.mockReset();
     mockUpdateApiKey.mockClear();
     mockMatchRateLimitRule.mockReset();
-    mockRunLimiter.mockReset();
+    mockConsumeLimiter.mockReset();
     mockAddLogJob.mockClear();
   });
 
@@ -85,7 +89,7 @@ describe('public check API', () => {
       source: 'custom',
       rule: matchedRule,
     });
-    mockRunLimiter.mockResolvedValue({
+    mockConsumeLimiter.mockResolvedValue({
       allowed: true,
       remaining: 9,
       resetAt: '2026-06-01T00:01:00.000Z',
@@ -119,12 +123,10 @@ describe('public check API', () => {
       method: 'GET',
       clientId: 'client_a',
     });
-    expect(mockRunLimiter).toHaveBeenCalledWith({
+    expect(mockConsumeLimiter).toHaveBeenCalledWith({
       rule: matchedRule,
-      apiKey: apiKeyRecord,
+      identity: 'key_identity',
       endpoint: '/v1/users',
-      method: 'GET',
-      clientId: 'client_a',
       requestId: 'req_123',
     });
     expect(mockUpdateApiKey).toHaveBeenCalledWith({
@@ -152,7 +154,7 @@ describe('public check API', () => {
       source: 'custom',
       rule: matchedRule,
     });
-    mockRunLimiter.mockResolvedValue({
+    mockConsumeLimiter.mockResolvedValue({
       allowed: false,
       remaining: 0,
       resetAt: '2026-06-01T00:01:00.000Z',
@@ -187,7 +189,7 @@ describe('public check API', () => {
 
     expect(response.status).toBe(401);
     expect(response.body.error.message).toBe('Invalid API key');
-    expect(mockRunLimiter).not.toHaveBeenCalled();
+    expect(mockConsumeLimiter).not.toHaveBeenCalled();
     expect(mockAddLogJob).not.toHaveBeenCalled();
   });
 
