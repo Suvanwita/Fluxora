@@ -1,4 +1,5 @@
 const apiKeyRepository = require('../repositories/api-key.repository');
+const { env } = require('../config/env');
 const { ApiError } = require('../utils/api-error');
 const { hashApiKey } = require('../utils/api-key');
 const { logger } = require('../utils/logger');
@@ -51,6 +52,53 @@ const enqueueRequestLog = async ({ apiKey, endpoint, method, requestId, decision
   }
 };
 
+const buildRedisFallbackDecision = ({ error, rule }) => {
+  const retryAfter = rule.windowSeconds || 60;
+  const resetAt = new Date(Date.now() + retryAfter * 1000).toISOString();
+  const isFailOpen = env.RATE_LIMIT_FALLBACK_MODE === 'fail_open';
+  const decision = isFailOpen
+    ? {
+        allowed: true,
+        remaining: rule.limit,
+        resetAt,
+        retryAfter: 0,
+        reason: 'redis_unavailable_fail_open',
+      }
+    : {
+        allowed: false,
+        remaining: 0,
+        resetAt,
+        retryAfter,
+        reason: 'redis_unavailable_fail_closed',
+      };
+
+  logger.warn('Rate limit fallback decision applied', {
+    mode: env.RATE_LIMIT_FALLBACK_MODE,
+    ruleId: rule.id,
+    algorithm: rule.algorithm,
+    allowed: decision.allowed,
+    reason: decision.reason,
+    error: error.message,
+  });
+
+  return decision;
+};
+
+const consumeLimiterWithFallback = async ({ rule, identity, endpoint, requestId }) => {
+  const { consume } = require('./limiterFactory');
+
+  try {
+    return await consume({
+      rule,
+      identity,
+      endpoint,
+      requestId,
+    });
+  } catch (error) {
+    return buildRedisFallbackDecision({ error, rule });
+  }
+};
+
 const checkRequest = async ({ apiKey: rawApiKey, endpoint, method, clientId, requestId }) => {
   const apiKey = await validateApiKey(rawApiKey);
   const ruleMatch = await matchRateLimitRule({
@@ -61,14 +109,13 @@ const checkRequest = async ({ apiKey: rawApiKey, endpoint, method, clientId, req
   });
   const rule = ruleMatch.rule;
   const { buildIdentity } = require('./limiter.service');
-  const { consume } = require('./limiterFactory');
   const identity = buildIdentity({
     apiKeyId: apiKey.id,
     endpoint,
     method,
     clientId,
   });
-  const limiterResult = await consume({
+  const limiterResult = await consumeLimiterWithFallback({
     rule,
     identity,
     endpoint,
@@ -107,6 +154,8 @@ const checkRequest = async ({ apiKey: rawApiKey, endpoint, method, clientId, req
 };
 
 module.exports = {
+  buildRedisFallbackDecision,
   checkRequest,
+  consumeLimiterWithFallback,
   validateApiKey,
 };

@@ -6,7 +6,7 @@ process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/fluxor
 process.env.REDIS_URL = 'redis://localhost:6379';
 process.env.JWT_SECRET = 'test-secret-with-at-least-thirty-two-chars';
 process.env.JWT_EXPIRES_IN = '1d';
-process.env.RATE_LIMIT_FALLBACK_MODE = 'allow';
+process.env.RATE_LIMIT_FALLBACK_MODE = 'fail_open';
 process.env.LOG_LEVEL = 'dev';
 
 const app = require('../src/app');

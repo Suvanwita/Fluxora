@@ -14,7 +14,7 @@ const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().int().positive('PORT must be a positive integer')),
   NODE_ENV: z.enum(['development', 'test', 'production']),
-  RATE_LIMIT_FALLBACK_MODE: z.enum(['allow', 'deny']),
+  RATE_LIMIT_FALLBACK_MODE: z.enum(['fail_open', 'fail_closed']),
   LOG_LEVEL: z.enum(['combined', 'common', 'dev', 'short', 'tiny']),
   CORS_ORIGIN: z.string().default('*'),
 });

@@ -44,7 +44,7 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: replace-with-a-long-random-secret
       JWT_EXPIRES_IN: 1d
-      RATE_LIMIT_FALLBACK_MODE: allow
+      RATE_LIMIT_FALLBACK_MODE: fail_open
       LOG_LEVEL: combined
     ports:
       - "5000:5000"

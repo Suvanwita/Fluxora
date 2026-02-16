@@ -4,7 +4,7 @@ process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/fluxor
 process.env.REDIS_URL = 'redis://localhost:6379';
 process.env.JWT_SECRET = 'test-secret-with-at-least-thirty-two-chars';
 process.env.JWT_EXPIRES_IN = '1d';
-process.env.RATE_LIMIT_FALLBACK_MODE = 'allow';
+process.env.RATE_LIMIT_FALLBACK_MODE = 'fail_open';
 process.env.LOG_LEVEL = 'dev';
 
 const request = require('supertest');
@@ -176,6 +176,44 @@ describe('public check API', () => {
       reason: 'rate_limit_exceeded',
     });
     expect(mockAddLogJob).toHaveBeenCalledWith('request-log', expect.objectContaining({ decision: 'THROTTLED' }));
+  });
+
+  it('allows with a warning reason when Redis fails in fail-open mode', async () => {
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    mockFindApiKeyByHash.mockResolvedValue(apiKeyRecord);
+    mockMatchRateLimitRule.mockResolvedValue({
+      matched: true,
+      source: 'custom',
+      rule: matchedRule,
+    });
+    mockConsumeLimiter.mockRejectedValue(new Error('Redis unavailable'));
+
+    const response = await request(app).post('/api/v1/check').send({
+      apiKey: rawApiKey,
+      endpoint: '/v1/users',
+      method: 'GET',
+      requestId: 'req_fallback',
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      allowed: true,
+      remaining: matchedRule.limit,
+      retryAfter: 0,
+      reason: 'redis_unavailable_fail_open',
+    });
+    expect(mockAddLogJob).toHaveBeenCalledWith('request-log', expect.objectContaining({ decision: 'ALLOWED' }));
+    expect(consoleWarn).toHaveBeenCalledWith(
+      'Rate limit fallback decision applied',
+      expect.objectContaining({
+        mode: 'fail_open',
+        ruleId: matchedRule.id,
+        allowed: true,
+      }),
+    );
+
+    consoleWarn.mockRestore();
   });
 
   it('rejects invalid API keys', async () => {
